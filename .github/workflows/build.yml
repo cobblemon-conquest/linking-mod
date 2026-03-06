@@ -4,7 +4,7 @@
 # against bad commits.
 
 name: build
-on: [pull_request, push]
+on: [pull_request]
 
 jobs:
   build:
@@ -34,6 +34,7 @@ jobs:
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' && !contains(env.VERSION, 'SNAPSHOT')
         with:
           tag_name: "v${{ env.VERSION }}"
           name: "v${{ env.VERSION }}"
