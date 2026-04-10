@@ -3,50 +3,100 @@
 # certain platforms or Java versions, and provides a first line of defence
 # against bad commits.
 
-name: build
+name: build-and-release
 on:
   push:
-    branches: [ main ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ main ]
+    branches: [ "**" ]
 
 jobs:
-  build:
+  ci:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      version: ${{ steps.detect_version.outputs.version }}
+      version_changed: ${{ steps.detect_version.outputs.version_changed }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Validate gradle wrapper
-        uses: gradle/actions/wrapper-validation@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup jdk
         uses: actions/setup-java@v4
         with:
-          java-version: '25'
+          java-version: '21'
           distribution: 'temurin'
-      
+          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
       - name: Make gradle wrapper executable
         run: chmod +x ./gradlew
       
-      - name: Build
-        run: ./gradlew build
+      - name: Build and test
+        run: ./gradlew --build-cache build test
 
-      - name: Get version
-        id: get_version
+      - name: Build Fabric release jar (remapJar)
+        run: ./gradlew --build-cache :fabric:remapJar
+
+      - name: Read version and detect version change
+        id: detect_version
         run: |
-          # Read from gradle.properties
-          VERSION=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2)
+          VERSION=$(grep '^mod_version' gradle.properties | cut -d'=' -f2 | xargs)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if git diff --unified=0 "${{ github.event.before }}" "${{ github.sha }}" -- gradle.properties | grep -Eq '^[+-][[:space:]]*mod_version[[:space:]]*='; then
+            echo "version_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "version_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Fabric remap jar for potential release
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabric-release-jar
+          path: |
+            fabric/build/libs/conquest_mod-fabric-*.jar
+            !fabric/build/libs/*-dev-shadow.jar
+            !fabric/build/libs/*-sources.jar
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.ci.outputs.version_changed == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Download built jars
+        uses: actions/download-artifact@v4
+        with:
+          name: fabric-release-jar
+          path: release-artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main' && !contains(env.VERSION, 'SNAPSHOT')
         with:
-          tag_name: "v${{ steps.get_version.outputs.version }}"
-          name: "v${{ steps.get_version.outputs.version }}"
-          files: build/libs/conquest-mod-*.jar
+          tag_name: "v${{ needs.ci.outputs.version }}"
+          name: "v${{ needs.ci.outputs.version }}"
+          files: release-artifacts/**/*.jar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
