@@ -4,8 +4,11 @@
   "compatibilityLevel": "JAVA_21",
   "minVersion": "0.8",
   "client": [
+    "polypokemon.client.PolymorphClientMixin"
   ],
   "mixins": [
+    "polypokemon.PolymorphDisguiseManagerMixin",
+    "polypokemon.PolymorphServerMixin"
   ],
   "injectors": {
     "defaultRequire": 1
